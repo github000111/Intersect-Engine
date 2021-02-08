@@ -40,6 +40,8 @@ namespace Intersect.Server.Maps
 
         [JsonIgnore] [NotMapped] public long LastUpdateTime = -1;
 
+        [JsonIgnore] [NotMapped] public long UpdateQueuedTime = -1;
+
         [JsonIgnore] [NotMapped] public long LastProjectileUpdateTime = -1;
 
         //Location of Map in the current grid

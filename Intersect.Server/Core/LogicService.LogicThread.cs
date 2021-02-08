@@ -62,8 +62,8 @@ namespace Intersect.Server.Core
 
                 try
                 {
-                    var sw = Stopwatch.StartNew();
-                    var swCpsTimer = sw.ElapsedMilliseconds + 1000;
+                    var swCpsTimer = Globals.Timing.Milliseconds + 1000;
+                    var dumpMetricsTimer = Globals.Timing.Milliseconds + 10000;
                     long swCps = 0;
 
                     long updateTimer = 0;
@@ -74,9 +74,7 @@ namespace Intersect.Server.Core
 
                     while (ServerContext.Instance.IsRunning)
                     {
-                        var startTime = sw.ElapsedMilliseconds;
-                        
-                        if (startTime > updateTimer)
+                        if (Globals.Timing.Milliseconds > updateTimer)
                         {
                             //Resync Active Maps By Scanning Players and Their Surrounding Maps
                             players = 0;
@@ -109,6 +107,18 @@ namespace Intersect.Server.Core
                                 }
                             }
 
+                            foreach (var map in MapInstance.Lookup)
+                            {
+                                if (!processedMaps.Contains(map.Key))
+                                {
+                                    processedMaps.Add(map.Key);
+                                    if (!ActiveMaps.Contains(map.Key))
+                                    {
+                                        AddToQueue((MapInstance)map.Value);
+                                    }
+                                }
+                            }
+
                             //Remove any Active Maps that we didn't deem neccessarry of processing
                             foreach (var map in ActiveMaps.ToArray())
                             {
@@ -119,7 +129,7 @@ namespace Intersect.Server.Core
                             }
 
                             //End Resync of Active Maps
-                            updateTimer = startTime + 250;
+                            updateTimer = Globals.Timing.Milliseconds + 250;
                         }
 
                         //Check our map update queues. If maps are ready to be updated based on our update intervals set in the server config then tell our thread pool to queue the map update as a work item.
@@ -127,7 +137,7 @@ namespace Intersect.Server.Core
                         {
                             if (Options.Instance.Processing.MapUpdateInterval != Options.Instance.Processing.ProjectileUpdateInterval)
                             {
-                                while (MapProjectileUpdateQueue.TryPeek(out MapInstance result) && result.LastProjectileUpdateTime + Options.Instance.Processing.ProjectileUpdateInterval < startTime)
+                                while (MapProjectileUpdateQueue.TryPeek(out MapInstance result) && result.LastProjectileUpdateTime + Options.Instance.Processing.ProjectileUpdateInterval < Globals.Timing.Milliseconds)
                                 {
                                     if (MapProjectileUpdateQueue.TryDequeue(out MapInstance sameResult))
                                     {
@@ -136,10 +146,15 @@ namespace Intersect.Server.Core
                                 }
                             }
 
-                            while (MapUpdateQueue.TryPeek(out MapInstance result) && result.LastUpdateTime + Options.Instance.Processing.MapUpdateInterval < startTime)
+                            while (MapUpdateQueue.TryPeek(out MapInstance result) && result.LastUpdateTime + Options.Instance.Processing.MapUpdateInterval < Globals.Timing.Milliseconds)
                             {
                                 if (MapUpdateQueue.TryDequeue(out MapInstance sameResult))
                                 {
+                                    if (result.LastUpdateTime > 0)
+                                    {
+                                        Metrics.RecordMapQueueUpdateLateness(Globals.Timing.Milliseconds - (result.LastUpdateTime + Options.Instance.Processing.MapUpdateInterval));
+                                    }
+                                    sameResult.UpdateQueuedTime = Globals.Timing.Milliseconds;
                                     LogicPool.QueueWorkItem(UpdateMap, sameResult, false);
                                 }
                             }                            
@@ -148,13 +163,19 @@ namespace Intersect.Server.Core
                         Time.Update();
                         swCps++;
 
-                        var endTime = sw.ElapsedMilliseconds;
-                        if (sw.ElapsedMilliseconds > swCpsTimer)
+                        var endTime = Globals.Timing.Milliseconds;
+                        if (Globals.Timing.Milliseconds > swCpsTimer)
                         {
                             Globals.Cps = swCps;
                             swCps = 0;
-                            swCpsTimer = sw.ElapsedMilliseconds + 1000;
+                            swCpsTimer = Globals.Timing.Milliseconds + 1000;
                             Console.Title = $"Intersect Server - CPS: {Globals.Cps}, Players: {players}, Active Maps: {ActiveMaps.Count}, Logic Threads: {LogicPool.ActiveThreads} ({LogicPool.InUseThreads} In Use), Pool Queue: {LogicPool.CurrentWorkItemsCount}, Idle: {LogicPool.IsIdle}";
+                        }
+
+                        if (Globals.Timing.Milliseconds > dumpMetricsTimer)
+                        {
+                            Metrics.LogInfo();
+                            dumpMetricsTimer = Globals.Timing.Milliseconds + 10000;
                         }
 
                         Thread.Yield();
@@ -204,11 +225,14 @@ namespace Intersect.Server.Core
                     }
                     else
                     {
-                        map.Update(Globals.Timing.Milliseconds);
+                        var time = Globals.Timing.Milliseconds;
+                        Metrics.RecordMapUpdateStartTime(Globals.Timing.Milliseconds - map.UpdateQueuedTime);
+                        map.Update(time);
                         if (ActiveMaps.Contains(map.Id))
                         {
                             MapUpdateQueue.Enqueue(map);
                         }
+                        Metrics.RecordMapUpdateTime(Globals.Timing.Milliseconds - time);
                     }
                 }
                 catch (ThreadAbortException)
