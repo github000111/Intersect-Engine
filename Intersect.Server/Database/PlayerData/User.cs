@@ -350,6 +350,14 @@ namespace Intersect.Server.Database.PlayerData
         public static User TryLogin(string username, string ptPassword)
         {
             var user = FindOnline(username);
+            if (user != null)
+            {
+                Console.WriteLine("Hit, " + username + " was already logged in, loading from memory.");
+            }
+            else
+            {
+                Console.WriteLine("Miss, " + username + " was not online, loading from db.");
+            }
             try
             {
                 using (var context = DbInterface.CreatePlayerContext())
